@@ -1,0 +1,29 @@
+{
+  "name": "ai-sheet-editor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "server": "tsx server/index.ts",
+    "dev:all": "concurrently -n server,web -c blue,green \"tsx server/index.ts\" \"vite\"",
+    "test": "vitest run",
+    "scorecard": "tsx scripts/scorecard.ts",
+    "followups": "tsx scripts/followups.ts"
+  },
+  "dependencies": {
+    "exceljs": "4.4.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "concurrently": "^9.1.2",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.1.3"
+  }
+}
