@@ -1,6 +1,9 @@
 # AI Sheet Editor
 
-**Showcase:** [website/index.html](website/index.html) — static overview of stack, workflow, and usage (open in a browser, or `npm run showcase`).
+**Live showcase:** [ashwin-subspace.github.io/ai-sheet-editor](https://ashwin-subspace.github.io/ai-sheet-editor/)  
+**Repository:** [github.com/ashwin-subspace/ai-sheet-editor](https://github.com/ashwin-subspace/ai-sheet-editor)
+
+Local preview: [website/index.html](website/index.html) or `npm run showcase`.
 
 Local spreadsheet workspace with an AI chat sidebar. You edit cells in the grid (or via formulas); the model proposes structured edits, a checker validates them on a copy, and nothing hits the real sheet until you accept.
 
