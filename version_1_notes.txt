@@ -1,0 +1,80 @@
+Local AI Sheet is a one-sheet editor: you type in the grid, or you ask a local model to propose edits, then you accept or reject them. The model never writes a cell. A checker applies the proposal to a copy, and the real sheet changes only when you accept.
+
+The product overview and feature list are in docs/idea.md. UX scope and model curation rules are in docs/ux-scope.md.
+
+## Three pieces
+
+```mermaid
+flowchart LR
+  UI["React page :5173"]
+  Engine["Workbook engine"]
+  Server["Node helper :8787"]
+  LM["LM Studio :1234"]
+  Disk[".xlsx and .chat.json"]
+
+  UI -->|"draw, type, preview"| Engine
+  UI -->|"open, save, chat"| Server
+  Server --> Disk
+  Server -->|"chat/completions"| LM
+  LM -->|"JSON text"| Server
+  Server -->|"unchecked text"| UI
+  UI -->|"checker on a copy"| Engine
+```
+
+Vite serves the page and proxies `/api` to the helper, so the browser never calls port 1234. LM Studio can keep CORS off.
+
+| Piece | Owns | Stays out of |
+|---|---|---|
+| React page, `src/ui/` | Grid, formula bar, chat, Accept and Reject | Formula math and “is this JSON legal?” |
+| Workbook engine, `src/engine/` | Cells, formula tree, operation check, undo snapshots | Network, ExcelJS, HTML |
+| Node helper, `server/` | Read and write `.xlsx`, backups, the model proxy | Applying model output to the file |
+
+The sheet is columns A–Z and rows 1–200. Cells live in a sparse map: an empty cell is simply missing from `Workbook.cells`.
+
+## Main processes
+
+**Typing a cell.** Keystrokes stay in a draft on the formula bar. Leaving the cell, pressing Enter, or selecting another cell calls `applyUserInput` in `src/engine/workbook.ts`. `true` and `false` become booleans, a plain number becomes a number, and text that starts with `=` is stored as a formula. If the sheet actually changed, `src/engine/history.ts` pushes a full copy of the previous workbook onto an undo stack of 20. Redo is cleared. Ctrl+Z and the Undo button swap those copies. Both are disabled while a preview is open.
+
+**Calculating a formula.** `src/engine/formula.ts` parses `=SUM(A1:A3)` with a recursive-descent parser. Each precedence level is its own function: comparisons, then `+` and `-`, then `*` and `/`, then unary minus, then cells, ranges, and calls. The result is an `Expr` tree. `evaluateCell` walks that tree and memoizes each cell. If a cell is still marked `"working"` when it is asked for again, the result is `#CYCLE!` (`A1 = A1+1` does not loop forever). Only `SUM`, `AVERAGE`, `COUNT`, and `IF` are calculated. Any other Excel formula is kept as text, shown from Excel’s cached value, and marked `unsupported`. The grid paints the calculated text. The formula bar still shows the formula. Inserting a row or column rewrites references with `shiftFormula`. A range grows when the insert sits inside it.
+
+**An AI edit.** This is the path that makes the app different from a normal sheet.
+
+1. `ChatPanel` sends your sentence. `App` commits any open cell draft first.
+2. `src/engine/context.ts` builds the request: the system rules, the last two chat turns, up to 100 non-empty cells, and the selection. A larger sheet sends the header row plus the selection and says the rest was omitted.
+3. `src/ai/propose.ts` asks LM Studio for JSON that matches `src/ai/schema.ts`. If the server rejects schema mode, it retries once with no `response_format`. That fallback does not count as a repair.
+4. `server/index.ts` posts to `http://127.0.0.1:1234/v1/chat/completions` at temperature `0.1` and about 1200 tokens. `server/model-reply.ts` reads the message. If the reasoning text is the one that actually contains edits, that text is used.
+5. `reviewModelText` in `src/engine/operations.ts` strips one markdown fence, requires a single JSON object, and refuses unknown fields. It clones the workbook and applies the batch. One illegal operation, or a circular formula, throws the whole batch away.
+6. A failed check may be sent back as a short `Rejected:` line, at most twice. Then the chat shows the error and the sheet is unchanged.
+7. A legal batch becomes `previewBook`. The grid draws that copy and outlines changed cells. Typing is locked. Accept pushes the old sheet onto the undo stack and swaps in the copy. Reject deletes the copy.
+
+A question such as “What is in this selection?” is a legal reply with an empty `operations` array. The sheet does not change.
+
+The eight operations are `write_range`, `set_formula`, `format_range`, `insert_rows`, `insert_columns`, `clear_range`, `set_column_width`, and `highlight_greater`. A batch may have at most 40 operations, and one `write_range` may be at most 40 rows by 8 columns. `highlight_greater` is the “color this when Actual is above Budget” case: the model names the two ranges, and our code does the comparison.
+
+Edits outside the selection are still legal. The preview warns you. That is so “add a column next to what I selected” can succeed.
+
+**Open and save.** `POST /api/open` reads an `.xlsx` from the `workbooks` folder and the matching `.chat.json` beside it. Upload sends the file as base64, capped at 20 MB, and does not pick a save path until you save. `server/xlsx.ts` uses ExcelJS on the first worksheet only. It keeps values, formulas, bold, solid fill, number formats, and column widths, and it warns when merges, extra sheets, charts, or other Excel features are dropped. Save writes the workbook, then the chat sidecar. If the file already exists, `server/backup.ts` copies it into `backups/` and keeps the last 5 copies. For a formula this app calculates, the file stores both the formula and our result, so Excel shows a number before it recalculates.
+
+`scripts/scorecard.ts` runs the 20 reliability prompts against a live model. `docs/model-notes.md` says that run has not happened yet, because LM Studio was not up.
+
+## Core topics, where they are used, and where to learn them
+
+**Recursive descent and an abstract syntax tree.** The formula parser and `evalExpr`. Read [Crafting Interpreters: parsing expressions](https://craftinginterpreters.com/parsing-expressions.html) and [evaluating expressions](https://craftinginterpreters.com/evaluating-expressions.html). Those two chapters are the same shape as `Parser` and `evalExpr`.
+
+**Memoization and a dependency graph.** `EvalCache` in `readCell`, plus `shiftFormula` when rows or columns move. [Memoization](https://en.wikipedia.org/wiki/Memoization) and [dependency graphs](https://en.wikipedia.org/wiki/Dependency_graph).
+
+**Discriminated unions.** `CellRuntime`, `Operation`, `Review`, and `ProposeResult` are objects with a tag (`kind` or `op`) and `switch` branches. [TypeScript narrowing](https://www.typescriptlang.org/docs/handbook/2/narrowing.html#discriminated-unions).
+
+**Snapshot undo (memento).** `src/engine/history.ts` stores clones from `structuredClone`, not reverse edits. [Memento](https://refactoring.guru/design-patterns/memento) and [structuredClone](https://developer.mozilla.org/en-US/docs/Web/API/Window/structuredClone).
+
+**Allowlist validation and atomic batches.** Unknown operations, extra JSON fields, colors that are not `#` plus six hex digits, and functions outside `SUM`, `AVERAGE`, `COUNT`, and `IF` reject the entire batch. [OWASP input validation](https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html) and [atomicity](https://en.wikipedia.org/wiki/Atomicity_(database_systems)).
+
+**JSON Schema as a hint to the model.** `src/ai/schema.ts` is sent as `response_format`. The checker is still the gate. [JSON Schema, step by step](https://json-schema.org/learn/getting-started-step-by-step), [LM Studio structured output](https://lmstudio.ai/docs/developer/openai-compat/structured-output), and the [Chat Completions API](https://platform.openai.com/docs/api-reference/chat/create). The helper speaks that same API at [LM Studio’s OpenAI-compatible endpoints](https://lmstudio.ai/docs/developer/openai-compat).
+
+**Context window budgeting.** `SNAPSHOT_LINE_CAP` is 100, and only the last two chat turns go to the model, because a small local model gets worse when the prompt is long. [What a context window is](https://ai.google.dev/gemini-api/docs/long-context).
+
+**Spreadsheet files.** ExcelJS stores a formula string and a result. It does not calculate. [ExcelJS formulas](https://github.com/exceljs/exceljs/blob/master/README.md#formula-value). Display formats are in `src/engine/format.ts`. [Excel number format codes](https://support.microsoft.com/en-us/office/number-format-codes-in-excel-5026bbd6-04bc-48cd-bf33-80f18b4eae68). Cell addresses follow the usual [Excel formula model](https://support.microsoft.com/en-us/office/overview-of-formulas-in-excel-ecfdc708-9162-49e8-b993-c311f47ca173).
+
+**React state and a dev proxy.** `src/ui/App.tsx` holds history, the preview copy, and chat in `useState`, and keeps the live workbook in a ref so keyboard undo does not read a stale render. [Managing state](https://react.dev/learn/managing-state) and [useRef](https://react.dev/reference/react/useRef). [Vite `server.proxy`](https://vite.dev/config/server-options.html#server-proxy) is why `/api` on port 5173 reaches port 8787. The helper itself is a [Node `http` server](https://nodejs.org/api/http.html) using the [file system API](https://nodejs.org/api/fs.html) for backups.
+
+**Tests.** Vitest covers the engine without a browser or a model: `src/engine/*.test.ts`, `server/xlsx.test.ts`, and `src/ai/propose.test.ts`. [Vitest](https://vitest.dev/guide/).

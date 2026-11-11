@@ -58,7 +58,7 @@ export async function proposeEdits(input: {
       ? "Rejected: that is one cell, not a table. Use one write_range. The first inner list is the headers, one name per cell, then one sample row. Example: rows:[[\"Left\",\"Spent\",\"Item\",\"Result\"],[900,0,\"opening\",\"\"]]. Do not put the user's sentence in one cell."
       : review.ok
         ? "Rejected: operations is empty. Send one JSON object that includes the edits."
-        : clip(review.error);
+        : repairReason(review.error);
     const repaired = await input.complete(
       request([...messages, { role: "user", content: reason }], useSchema),
     );
@@ -103,4 +103,18 @@ function spansColumns(review: Extract<Review, { ok: true }>): boolean {
 function clip(error: string): string {
   const text = error.startsWith("Rejected:") ? error : `Rejected: ${error}`;
   return text.slice(0, 500);
+}
+
+function repairReason(error: string): string {
+  if (/write_range.*unknown field count|operation \d+ has unknown field count/i.test(error)) {
+    return clip(
+      "Rejected: write_range allows only op, start, and rows. To add N data rows, use one write_range with N inner arrays in rows (not count). Example for 2 rows at A3: rows:[[\"Food\",400,350,\"=C3-B3\"],[\"Transport\",200,180,\"=C4-B4\"]].",
+    );
+  }
+  if (/has unknown field (\w+)/i.test(error)) {
+    return clip(
+      `${error} Each operation may only use the fields listed for that op in the system prompt. Remove extra fields.`,
+    );
+  }
+  return clip(error);
 }

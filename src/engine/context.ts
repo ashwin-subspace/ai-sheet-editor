@@ -12,7 +12,7 @@ Each inner list in rows is one sheet row from left to right. Do not put each val
 If the user asks for a table, put each column name in its own cell on row 1, then add a sample row. Never put the user's sentence into one cell.
 - {"op":"set_formula","cell":"B3","formula":"=SUM(B2:B2)"}
 - {"op":"format_range","range":"A1:C1","bold":true,"fill":"#FFF2CC","numberFormat":"0.00"}
-- {"op":"insert_rows","at":3,"count":1}
+- {"op":"insert_rows","at":3,"count":1} inserts blank rows only. To add rows with values, use write_range at the first empty row and put every new row in rows. Do not put count on write_range.
 - {"op":"insert_columns","at":"D","count":1}
 - {"op":"clear_range","range":"C2:C5"}
 - {"op":"set_column_width","column":"A","width":18}
@@ -22,6 +22,7 @@ No other functions. No other sheets. Columns are A-Z and rows are 1-200.
 Do not add fields that are not listed.
 Examples:
 User: Set A1 to Hello. -> {"message":"Set A1.","operations":[{"op":"write_range","start":"A1","rows":[["Hello"]]}]}
+User: Add 3 more rows like row 2 starting at A3. -> {"message":"Added 3 rows.","operations":[{"op":"write_range","start":"A3","rows":[["Food",400,350,"=C3-B3"],["Transport",200,180,"=C4-B4"],["Power",150,160,"=C5-B5"]]}]}
 User: What is in A1? -> {"message":"A1 contains Hello.","operations":[]}`;
 
 export interface ChatTurn {

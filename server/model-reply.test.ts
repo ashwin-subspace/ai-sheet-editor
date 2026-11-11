@@ -18,6 +18,11 @@ describe("modelReplyText", () => {
     expect(modelReplyText({ content: "   ", reasoning_content: reasoning })).toBe(reasoning);
   });
 
+  it("uses Ollama thinking text when the reply is blank", () => {
+    const thinking = "{\"message\":\"Added Balance.\",\"operations\":[]}";
+    expect(modelReplyText({ content: "", thinking })).toBe(thinking);
+  });
+
   it("returns null when both parts are empty", () => {
     expect(modelReplyText({ content: "", reasoning_content: "" })).toBeNull();
     expect(modelReplyText(undefined)).toBeNull();

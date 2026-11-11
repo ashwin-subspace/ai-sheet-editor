@@ -63,12 +63,12 @@ The application previews the proposed edits before applying them.
 
 ## Local-first AI
 
-The proposed application uses a downloaded model running through LM Studio rather than requiring a cloud AI service.
+The application uses a downloaded model running through Ollama rather than requiring a cloud AI service. Models on this machine live in `F:\Ollama\models`.
 
 ```text
 User prompt + relevant workbook context
                     ↓
-          Local AI through LM Studio
+          Local AI through Ollama
                     ↓
         Structured spreadsheet operations
                     ↓
@@ -101,7 +101,7 @@ Charts, advanced analysis, multiple-sheet automation, and broader Excel compatib
 - Development assistance: Cursor.
 - Desktop application: Electron.
 - Interface: React and TypeScript.
-- AI runtime: LM Studio with a compatible local model.
+- AI runtime: Ollama at `http://127.0.0.1:11434/v1`, using the models in `F:\Ollama\models`.
 - Application logic: a local backend that validates AI-proposed operations.
 - File handling: a spreadsheet library selected for its features and licensing.
 

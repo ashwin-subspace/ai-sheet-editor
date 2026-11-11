@@ -53,6 +53,30 @@ export type Review =
 const ROOT_KEYS = new Set(["message", "operations"]);
 const FILL = /^#[0-9A-Fa-f]{6}$/;
 
+/** Fields allowed per op — extras from the shared JSON schema are stripped before validation. */
+export const OPERATION_FIELDS: Record<string, readonly string[]> = {
+  write_range: ["op", "start", "rows"],
+  set_formula: ["op", "cell", "formula"],
+  format_range: ["op", "range", "bold", "fill", "numberFormat"],
+  insert_rows: ["op", "at", "count"],
+  insert_columns: ["op", "at", "count"],
+  clear_range: ["op", "range"],
+  set_column_width: ["op", "column", "width"],
+  highlight_greater: ["op", "leftRange", "rightRange", "fill"],
+};
+
+export function sanitizeOperationRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const op = record.op;
+  if (typeof op !== "string") return record;
+  const allowed = OPERATION_FIELDS[op];
+  if (!allowed) return record;
+  const next: Record<string, unknown> = {};
+  for (const key of allowed) {
+    if (key in record) next[key] = record[key];
+  }
+  return next;
+}
+
 export function parseModelJson(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
   let trimmed = text.trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
@@ -192,7 +216,7 @@ function readOperation(value: unknown): { ok: true; operation: Operation } | { o
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { ok: false, error: "is not an object." };
   }
-  const record = value as Record<string, unknown>;
+  const record = sanitizeOperationRecord(value as Record<string, unknown>);
   const op = record.op;
   if (typeof op !== "string") return { ok: false, error: "is missing op." };
   switch (op) {

@@ -6,9 +6,11 @@
     "dev": "vite",
     "server": "tsx server/index.ts",
     "dev:all": "concurrently -n server,web -c blue,green \"tsx server/index.ts\" \"vite\"",
+    "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "scorecard": "tsx scripts/scorecard.ts",
-    "followups": "tsx scripts/followups.ts"
+    "followups": "tsx scripts/followups.ts",
+    "showcase": "npx --yes serve website"
   },
   "dependencies": {
     "exceljs": "4.4.0",

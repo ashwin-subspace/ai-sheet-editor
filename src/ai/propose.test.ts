@@ -47,13 +47,13 @@ describe("proposeEdits", () => {
     expect(base.workbook.cells.A1).toBeUndefined();
   });
 
-  it("stops immediately when LM Studio is unreachable", async () => {
+  it("stops immediately when Ollama is unreachable", async () => {
     const fake = scripted([
-      { ok: false, status: 503, error: "LM Studio is not running at http://localhost:1234. The sheet was not changed." },
+      { ok: false, status: 503, error: "Connection refused at http://127.0.0.1:11434/v1. The sheet was not changed." },
     ]);
     const result = await proposeEdits({ ...base, complete: fake.complete });
     expect(result.kind).toBe("error");
-    if (result.kind === "error") expect(result.message).toMatch(/not running/);
+    if (result.kind === "error") expect(result.message).toMatch(/Connection refused/);
     expect(fake.calls).toHaveLength(1);
   });
 
@@ -101,5 +101,106 @@ describe("proposeEdits", () => {
     const fake = scripted([{ ok: true, content: JSON.stringify({ message: "A1 is empty.", operations: [] }) }]);
     const result = await proposeEdits({ ...base, prompt: "What is in A1?", complete: fake.complete });
     expect(result).toEqual({ kind: "message", message: "A1 is empty." });
+  });
+
+  it("returns error when a repair call fails with 503", async () => {
+    const fake = scripted([
+      { ok: true, content: "not json" },
+      { ok: false, status: 503, error: "Groq unreachable. The sheet was not changed." },
+    ]);
+    const result = await proposeEdits({ ...base, complete: fake.complete });
+    expect(result.kind).toBe("error");
+    expect(fake.calls).toHaveLength(2);
+    expect(base.workbook.cells.A1).toBeUndefined();
+  });
+
+  it("stops after schema fallback when the second call also fails", async () => {
+    const fake = scripted([
+      { ok: false, status: 400, error: "schema unsupported", schemaRejected: true },
+      { ok: false, status: 400, error: "Bad request. The sheet was not changed." },
+    ]);
+    const result = await proposeEdits({ ...base, complete: fake.complete });
+    expect(result.kind).toBe("error");
+    expect(fake.calls).toHaveLength(2);
+    expect(fake.calls[1].response_format).toBeUndefined();
+  });
+
+  it("previews on the third call after two failed repairs", async () => {
+    const good = JSON.stringify({
+      message: "Set A1.",
+      operations: [{ op: "write_range", start: "A1", rows: [["Hello"]] }],
+    });
+    const fake = scripted([
+      { ok: true, content: JSON.stringify({ message: "x", operations: [{ op: "set_formula", cell: "A1", formula: "=VLOOKUP(A1,A1:B2,1)" }] }) },
+      { ok: true, content: JSON.stringify({ message: "x", operations: [{ op: "format_range", range: "A1:AA2", bold: true }] }) },
+      { ok: true, content: good },
+    ]);
+    const result = await proposeEdits({ ...base, complete: fake.complete });
+    expect(result.kind).toBe("preview");
+    expect(fake.calls).toHaveLength(3);
+  });
+
+  it("accepts valid JSON wrapped in markdown on a repair", async () => {
+    const fenced = '```json\n{"message":"Set A1.","operations":[{"op":"write_range","start":"A1","rows":[["Hi"]]}]}\n```';
+    const fake = scripted([
+      { ok: true, content: "not json" },
+      { ok: true, content: fenced },
+    ]);
+    const result = await proposeEdits({ ...base, complete: fake.complete });
+    expect(result.kind).toBe("preview");
+    expect(fake.calls).toHaveLength(2);
+  });
+
+  it("returns a message for a question when the sheet is not empty", async () => {
+    const book = createWorkbook();
+    book.cells.A1 = { value: "Rent" };
+    const fake = scripted([{ ok: true, content: JSON.stringify({ message: "A1 is Rent.", operations: [] }) }]);
+    const result = await proposeEdits({
+      workbook: book,
+      selection: base.selection,
+      history: [],
+      prompt: "What is in A1?",
+      complete: fake.complete,
+    });
+    expect(result).toEqual({ kind: "message", message: "A1 is Rent." });
+    expect(book.cells.A1?.value).toBe("Rent");
+  });
+
+  it("repairs write_range that wrongly includes count", async () => {
+    const bad = JSON.stringify({
+      message: "Added ten rows.",
+      operations: [{ op: "write_range", start: "A3", count: 10, rows: [["Food", 400, 350, "=C3-B3"]] }],
+    });
+    const fake = scripted([
+      { ok: true, content: bad },
+      {
+        ok: true,
+        content: JSON.stringify({
+          message: "Added rows.",
+          operations: [
+            {
+              op: "write_range",
+              start: "A3",
+              rows: [
+                ["Food", 400, 350, "=C3-B3"],
+                ["Transport", 200, 180, "=C4-B4"],
+              ],
+            },
+          ],
+        }),
+      },
+    ]);
+    const book = createWorkbook();
+    book.cells.A1 = { value: "Category" };
+    const result = await proposeEdits({
+      workbook: book,
+      selection: base.selection,
+      history: [],
+      prompt: "make ten more records with default values",
+      complete: fake.complete,
+    });
+    expect(result.kind).toBe("preview");
+    expect(fake.calls).toHaveLength(1);
+    if (result.kind === "preview") expect(result.review.workbook.cells.A3?.value).toBe("Food");
   });
 });

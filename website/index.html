@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="AI Sheet Editor — local-first spreadsheet workspace with AI chat. Cursor for spreadsheets." />
+  <title>AI Sheet Editor — Showcase</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="logo" href="#top" aria-label="AI Sheet Editor home">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+          <rect x="2" y="2" width="24" height="24" rx="4" stroke="#2563eb" stroke-width="2" fill="#e8f0fe"/>
+          <path d="M7 9h14M7 14h10M7 19h12" stroke="#1c2430" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        AI Sheet Editor
+      </a>
+      <nav class="site-nav" aria-label="Page sections">
+        <a href="#stack">Tech stack</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#how-to-use">How to use</a>
+        <a href="#quick-start">Quick start</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div>
+        <span class="hero-tag">Local-first</span>
+        <h1>Cursor for spreadsheets</h1>
+        <p class="hero-lead">
+          A spreadsheet workspace with an AI chat sidebar. Edit cells and formulas on the left;
+          describe changes in plain language on the right. The model proposes structured edits,
+          the engine validates them on a copy, and nothing touches your real sheet until you accept.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#quick-start">Run locally</a>
+          <a class="btn btn-secondary" href="#how-to-use">See the workflow</a>
+        </div>
+      </div>
+      <div class="hero-visual" aria-hidden="true">
+        <div class="mock-toolbar">
+          <span><strong>Sheet</strong></span>
+          <span class="mock-pill ready">AI ready</span>
+          <span style="color:#526173">Ollama · expense-tracker.xlsx</span>
+        </div>
+        <div class="mock-body">
+          <div class="mock-grid">
+            <table>
+              <thead>
+                <tr><th></th><th>A</th><th>B</th><th>C</th></tr>
+              </thead>
+              <tbody>
+                <tr><th>1</th><td>Category</td><td>Budget</td><td>Actual</td></tr>
+                <tr><th>2</th><td>Rent</td><td>1200</td><td>1180</td></tr>
+                <tr><th>3</th><td>Food</td><td>400</td><td>385</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="mock-chat">
+            <div class="mock-bubble user">Add a savings column and highlight over-budget rows.</div>
+            <div class="mock-bubble ai">Preview: 3 ops — accept?</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="stack" class="section-wrap alt">
+      <div class="section-inner">
+        <h2>Tech stack</h2>
+        <p class="section-intro">
+          Each layer has a clear boundary: the UI never writes the sheet from raw model text;
+          the engine is authoritative; the file helper handles disk and provider proxy.
+        </p>
+        <div class="stack-grid">
+          <article class="stack-card">
+            <div class="layer">Frontend</div>
+            <h3>React 19 + TypeScript + Vite 6</h3>
+            <p>Single-page UI: custom grid (A–Z × 200), formula bar, worksheet chrome, chat sidebar, accept/reject preview, and toolbar with provider/model picker.</p>
+          </article>
+          <article class="stack-card">
+            <div class="layer">Engine</div>
+            <h3>Workbook &amp; formulas</h3>
+            <p>In-browser workbook engine, operation checker, undo/redo. Built-in formulas include <code>SUM</code>, <code>AVERAGE</code>, <code>COUNT</code>, and <code>IF</code>.</p>
+          </article>
+          <article class="stack-card">
+            <div class="layer">AI</div>
+            <h3>Structured proposals</h3>
+            <p>Models return JSON operations (not free-form patches). Client repairs and validates schema; <code>proposeEdits</code> never mutates the live grid directly.</p>
+          </article>
+          <article class="stack-card">
+            <div class="layer">Server</div>
+            <h3>Node file helper (:8787)</h3>
+            <p>ExcelJS for <code>.xlsx</code> open/save, backups, <code>/api/health</code> and <code>/api/ready</code>, model settings, and proxy to Ollama (default), Gemini, or Groq.</p>
+          </article>
+          <article class="stack-card">
+            <div class="layer">Testing</div>
+            <h3>Vitest</h3>
+            <p>Unit tests for engine, shared types, server handlers, readiness, and curated sheet-friendly model lists.</p>
+          </article>
+          <article class="stack-card">
+            <div class="layer">Runtime</div>
+            <h3>Local-first AI</h3>
+            <p>Default provider is Ollama at <code>127.0.0.1:11434</code>. Optional cloud keys live in gitignored <code>server/model-settings.json</code>.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture" class="section-wrap">
+      <h2>Architecture &amp; workflow</h2>
+      <p class="section-intro">
+        End-to-end path from a user prompt to a saved workbook. Preview runs against a copy;
+        acceptance applies operations to the real sheet.
+      </p>
+
+      <div class="workflow-box" role="img" aria-label="Flow: prompt, local AI, JSON operations, checker, preview, user accept or reject, save xlsx">
+        <div class="flow-diagram">
+          <div class="flow-step">
+            <span class="flow-num">1</span>
+            <div>
+              <strong>User prompt + selection context</strong>
+              <span>Chat sends workbook slice and instructions when readiness is green.</span>
+            </div>
+          </div>
+          <div class="flow-connector" aria-hidden="true">↓</div>
+          <div class="flow-step">
+            <span class="flow-num">2</span>
+            <div>
+              <strong>Provider (Ollama / Gemini / Groq)</strong>
+              <span>File helper proxies the request; API keys stay on the server when configured.</span>
+            </div>
+          </div>
+          <div class="flow-connector" aria-hidden="true">↓</div>
+          <div class="flow-step">
+            <span class="flow-num">3</span>
+            <div>
+              <strong>Structured JSON operations</strong>
+              <span>Schema + repairs in <code>src/ai/</code>; no direct sheet writes from model output.</span>
+            </div>
+          </div>
+          <div class="flow-connector" aria-hidden="true">↓</div>
+          <div class="flow-step">
+            <span class="flow-num">4</span>
+            <div>
+              <strong>Engine checker on a copy</strong>
+              <span>Invalid ops are blocked; preview highlights proposed changes.</span>
+            </div>
+          </div>
+          <div class="flow-connector" aria-hidden="true">↓</div>
+          <div class="flow-step">
+            <span class="flow-num">5</span>
+            <div>
+              <strong>Accept or reject</strong>
+              <span>Accept merges into the live workbook; reject discards the proposal. Undo available after accept.</span>
+            </div>
+          </div>
+          <div class="flow-connector" aria-hidden="true">↓</div>
+          <div class="flow-step">
+            <span class="flow-num">6</span>
+            <div>
+              <strong>Save <code>.xlsx</code></strong>
+              <span>ExcelJS export; chat history stored separately from the workbook file.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h3 style="margin:0 0 12px;font-size:1.1rem">Layer boundaries</h3>
+      <table class="layer-table">
+        <thead>
+          <tr>
+            <th scope="col">Layer</th>
+            <th scope="col">Responsibility</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Engine / checker</td>
+            <td>Authoritative edit validation; new operation types need tests.</td>
+          </tr>
+          <tr>
+            <td>AI propose</td>
+            <td>Schema and repairs; no direct sheet writes.</td>
+          </tr>
+          <tr>
+            <td>Server helper</td>
+            <td>Files, settings, provider proxy, readiness gates.</td>
+          </tr>
+          <tr>
+            <td>UI</td>
+            <td>When AI runs, how errors read, model curation (max three sheet-friendly models per provider).</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="how-to-use" class="section-wrap alt">
+      <div class="section-inner">
+        <h2>How to use the app</h2>
+        <p class="section-intro">
+          Navigation mirrors the real UI: toolbar on top, grid on the left, AI chat on the right.
+          Chat stays disabled until the readiness gate passes.
+        </p>
+
+        <div class="ui-map">
+          <h3>Layout at a glance</h3>
+          <div class="ui-layout">
+            <div class="ui-region ui-label-toolbar">
+              <span class="label">Toolbar</span>
+              <p>Open / save workbook, undo/redo, provider &amp; model, readiness status pill, advanced settings.</p>
+            </div>
+            <div class="ui-region">
+              <span class="label">Grid (left)</span>
+              <p>Cell editing, formula bar, range selection. Use <strong>Preview sample edit</strong> anytime — local checker only, no model call.</p>
+            </div>
+            <div class="ui-region">
+              <span class="label">AI chat (right)</span>
+              <p>Natural-language requests. <strong>Send</strong> unlocks when file helper, sample edit, and <code>/api/ready</code> are all green.</p>
+            </div>
+          </div>
+        </div>
+
+        <ol class="steps-list" style="margin-top:32px">
+          <li>
+            <p class="step-title">Start dev stack</p>
+            <p class="step-desc">From the repo root, run <code>npm run dev:all</code> and open <a href="http://127.0.0.1:5173">http://127.0.0.1:5173</a>. Vite proxies <code>/api</code> to port <strong>8787</strong>.</p>
+          </li>
+          <li>
+            <p class="step-title">Open or create a workbook</p>
+            <p class="step-desc">Use toolbar actions to open an existing <code>.xlsx</code> or work in a new sheet. Files default to <code>./workbooks</code> unless <code>WORKBOOK_DIR</code> is set.</p>
+          </li>
+          <li>
+            <p class="step-title">Wait for readiness</p>
+            <p class="step-desc">Fix setup issues via the status strip if needed: health check, sample edit pass, provider/model and API key (for Gemini/Groq). Preventable failures never call the model or dump raw provider errors in chat.</p>
+          </li>
+          <li>
+            <p class="step-title">Prompt with context</p>
+            <p class="step-desc">Select cells when relevant, then ask for tables, formatting, or formulas — e.g. “Create a monthly expense tracker with totals.”</p>
+          </li>
+          <li>
+            <p class="step-title">Review preview</p>
+            <p class="step-desc">Inspect proposed operations on the preview copy. <strong>Accept</strong> applies to the live sheet; <strong>Reject</strong> drops the batch.</p>
+          </li>
+          <li>
+            <p class="step-title">Save</p>
+            <p class="step-desc">Save through the file helper; reopen in this app or Excel. Backups run before overwrite when configured.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="quick-start" class="section-wrap">
+      <h2>Quick start</h2>
+      <p class="section-intro">Minimal commands to run the full app locally. This showcase page is static and does not require Ollama.</p>
+
+      <pre class="code-block"><code>npm install
+npm run dev:all
+
+<span class="comment"># Open in browser</span>
+<span class="comment"># http://127.0.0.1:5173</span></code></pre>
+
+      <table class="env-table">
+        <thead>
+          <tr>
+            <th scope="col">Variable</th>
+            <th scope="col">Default</th>
+            <th scope="col">Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>OLLAMA_URL</code></td>
+            <td><code>http://127.0.0.1:11434/v1</code></td>
+            <td>Ollama OpenAI-compatible API</td>
+          </tr>
+          <tr>
+            <td><code>WORKBOOK_DIR</code></td>
+            <td><code>./workbooks</code></td>
+            <td>Folder for <code>.xlsx</code> and <code>.chat.json</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:24px;color:var(--text-muted);font-size:0.95rem">
+        Other scripts: <code>npm run dev</code> (Vite only), <code>npm run server</code> (helper only),
+        <code>npm test</code>, <code>npm run build</code>.
+      </p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Product docs: see the repository <a href="../README.md">README.md</a>, <code>docs/idea.md</code>, and <code>docs/ux-scope.md</code>.</p>
+    <p>AI Sheet Editor — local spreadsheet workspace with guarded AI edits.</p>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>

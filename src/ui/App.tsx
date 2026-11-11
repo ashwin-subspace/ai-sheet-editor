@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { proposeEdits, type CompletionRequest, type CompletionResult } from "../ai/propose";
+import { proposeEdits } from "../ai/propose";
 import { formatRange, indexToCol, normalizeSelection, parseAddress } from "../engine/address";
 import type { ChatTurn } from "../engine/context";
 import { evaluationCache } from "../engine/formula";
@@ -8,9 +8,13 @@ import { reviewModelText } from "../engine/operations";
 import { SAMPLE_EDIT } from "../engine/sample";
 import { COL_COUNT, ROW_COUNT, createWorkbook, type Workbook } from "../engine/types";
 import { applyUserInput, cellView, formulaBarText, sameWorkbook } from "../engine/workbook";
-import { ChatPanel, type ChatMessage } from "./ChatPanel";
+import { listCuratedModels, modelOptionLabel, pickDefaultModel, shouldAutoSwitchModel, type ModelProviderId } from "../shared/sheet-models";
+import { formatUserError, userErrorFromMessage } from "../shared/user-errors";
+import { ChatPanel, type ChatMessage, type SetupIssue } from "./ChatPanel";
+import { runClientReadiness } from "./readiness";
 import { FormulaBar } from "./FormulaBar";
 import { Grid } from "./Grid";
+import { completeModel as completeModelRequest, isDirty, rejectAssistantText } from "./preview-state";
 
 interface ListedFile {
   name: string;
@@ -19,6 +23,16 @@ interface ListedFile {
 
 interface StoredChat {
   messages: { role: "user" | "assistant" | "error"; text: string }[];
+}
+
+type ProviderId = "ollama" | "gemini" | "groq";
+
+interface PublicSettings {
+  provider: ProviderId;
+  providerLabel: string;
+  model: string;
+  keyConfigured: boolean;
+  keyHint: string;
 }
 
 export function App() {
@@ -39,6 +53,18 @@ export function App() {
   const [helperOk, setHelperOk] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Type in a cell, or preview the sample edit.");
+  const [modelNote, setModelNote] = useState("Checking models…");
+  const [provider, setProvider] = useState<ProviderId>("ollama");
+  const [selectedModel, setSelectedModel] = useState("");
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [keyConfigured, setKeyConfigured] = useState(false);
+  const [keyHint, setKeyHint] = useState("");
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const [showAllModels, setShowAllModels] = useState(false);
+  const [usageNote, setUsageNote] = useState("");
+  const [aiReady, setAiReady] = useState(false);
+  const [setupIssues, setSetupIssues] = useState<SetupIssue[]>([]);
+  const [checkingSetup, setCheckingSetup] = useState(false);
   const draftRef = useRef("");
   const anchorRef = useRef("A1");
   const previewRef = useRef(false);
@@ -47,6 +73,20 @@ export function App() {
   const shown = previewBook ?? history.present;
   const cache = useMemo(() => evaluationCache(), [shown]);
   const previewing = previewBook !== null;
+  const visibleModels = useMemo(() => {
+    const curated = listCuratedModels(modelOptions, provider as ModelProviderId);
+    const base = showAllModels
+      ? listCuratedModels(modelOptions, provider as ModelProviderId, { showAll: true, max: modelOptions.length })
+      : curated;
+    if (selectedModel && !base.includes(selectedModel)) return [selectedModel, ...base];
+    return base;
+  }, [modelOptions, showAllModels, selectedModel, provider]);
+
+  const statusPill = useMemo(() => {
+    if (!helperOk) return { label: "Offline editing only", tone: "offline" as const };
+    if (aiReady) return { label: "Ready", tone: "ready" as const };
+    return { label: "Setup needed", tone: "setup" as const };
+  }, [helperOk, aiReady]);
 
   useEffect(() => {
     workbookRef.current = history.present;
@@ -63,6 +103,7 @@ export function App() {
 
   useEffect(() => {
     void refreshHelper();
+    void loadProvider();
   }, []);
 
   useEffect(() => {
@@ -143,6 +184,182 @@ export function App() {
       await loadFiles(config.directory);
     } catch {
       setHelperOk(false);
+    }
+  }
+
+  async function refreshReadiness() {
+    setCheckingSetup(true);
+    try {
+      const result = await runClientReadiness();
+      setAiReady(result.ok);
+      setSetupIssues(result.issues.map((issue) => ({ title: issue.title, fix: issue.fix })));
+    } finally {
+      setCheckingSetup(false);
+    }
+  }
+
+  function applyUsageFromBody(body: { usageNote?: string }) {
+    if (typeof body.usageNote === "string" && body.usageNote.trim()) {
+      setUsageNote(body.usageNote.trim());
+    }
+  }
+
+  function applyPublic(settings: PublicSettings) {
+    setProvider(settings.provider);
+    setSelectedModel(settings.model);
+    setKeyConfigured(settings.keyConfigured);
+    setKeyHint(settings.keyHint);
+    if (settings.provider === "ollama") setUsageNote("");
+    setModelNote(
+      settings.model
+        ? `${settings.providerLabel}: ${settings.model}`
+        : `${settings.providerLabel} (choose a model${settings.provider === "ollama" ? "" : " after saving an API key"})`,
+    );
+  }
+
+  async function postSettings(update: { provider: ProviderId; model?: string; apiKey?: string }): Promise<PublicSettings> {
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(update),
+    });
+    if (response.status === 404) {
+      throw new Error("OUTDATED_HELPER");
+    }
+    if (!response.ok) throw new Error("Could not save the model settings.");
+    return await response.json() as PublicSettings;
+  }
+
+  function settingsFailureMessage(error: unknown): string {
+    if (error instanceof Error && error.message === "OUTDATED_HELPER") {
+      return "The file helper is still the old version (no /api/settings). Stop it and run npm run dev:all again from this project folder.";
+    }
+    return "The file helper is not running, so provider settings could not be saved.";
+  }
+
+  async function loadProvider() {
+    try {
+      const response = await fetch("/api/settings");
+      if (response.status === 404) {
+        setModelNote(settingsFailureMessage(new Error("OUTDATED_HELPER")));
+        setStatus(settingsFailureMessage(new Error("OUTDATED_HELPER")));
+        return;
+      }
+      if (!response.ok) throw new Error("settings");
+      const settings = await response.json() as PublicSettings;
+      applyPublic(settings);
+      await loadModelIds(settings);
+      await refreshReadiness();
+    } catch {
+      setModelNote("The file helper is not running, so the model list could not be checked.");
+      setAiReady(false);
+    }
+  }
+
+  async function loadModelIds(settings: PublicSettings) {
+    try {
+      const response = await fetch("/api/models");
+      const body = (await response.json()) as {
+        models?: string[];
+        curatedModels?: string[];
+        defaultModel?: string;
+        error?: string;
+        usageNote?: string;
+      };
+      applyUsageFromBody(body);
+      const ids = Array.isArray(body.models) ? body.models.filter((id) => id) : [];
+      setModelOptions(ids);
+      const curated = Array.isArray(body.curatedModels) && body.curatedModels.length
+        ? body.curatedModels
+        : listCuratedModels(ids, settings.provider);
+      if (!response.ok || ids.length === 0) {
+        setModelNote(
+          settings.provider === "ollama" && ids.length === 0
+            ? "Start Ollama and pull a chat model (e.g. llama3.1:8b)."
+            : body.error ?? `${settings.providerLabel}: no models listed.`,
+        );
+        return;
+      }
+      if (settings.model && ids.includes(settings.model)) {
+        if (shouldAutoSwitchModel(settings.model, settings.provider)) {
+          const better = pickDefaultModel(ids, settings.provider);
+          if (better && better !== settings.model) {
+            const saved = await postSettings({ provider: settings.provider, model: better });
+            applyPublic(saved);
+            setModelNote(`${settings.providerLabel}: switched to ${better} for sheet edits.`);
+            return;
+          }
+        }
+        setModelNote(`${settings.providerLabel}: ${settings.model}`);
+        return;
+      }
+      const next = body.defaultModel && ids.includes(body.defaultModel)
+        ? body.defaultModel
+        : pickDefaultModel(ids, settings.provider);
+      if (!next) {
+        setModelNote(
+          curated.length
+            ? `${settings.providerLabel}: choose a model from the short list.`
+            : "Pull or enable a sheet-friendly chat model.",
+        );
+        return;
+      }
+      const saved = await postSettings({ provider: settings.provider, model: next });
+      applyPublic(saved);
+    } catch (error) {
+      setModelNote(settingsFailureMessage(error));
+    }
+  }
+
+  async function chooseProvider(next: ProviderId) {
+    const previous = provider;
+    setApiKeyDraft("");
+    setProvider(next);
+    setSelectedModel("");
+    setModelOptions([]);
+    setShowAllModels(false);
+    setUsageNote("");
+    setModelNote(`Saving ${next === "ollama" ? "Ollama" : next === "gemini" ? "Gemini" : "Groq"}…`);
+    try {
+      const saved = await postSettings({ provider: next, model: "" });
+      applyPublic(saved);
+      setModelNote(`Checking ${saved.providerLabel} models…`);
+      await loadModelIds(saved);
+      await refreshReadiness();
+    } catch (error) {
+      setProvider(previous);
+      const message = settingsFailureMessage(error);
+      setModelNote(message);
+      setStatus(message);
+    }
+  }
+
+  async function chooseModel(next: string) {
+    if (!next) return;
+    try {
+      const saved = await postSettings({ provider, model: next });
+      applyPublic(saved);
+      await refreshReadiness();
+    } catch (error) {
+      const message = settingsFailureMessage(error);
+      setModelNote(message);
+      setStatus(message);
+    }
+  }
+
+  async function saveKey() {
+    const key = apiKeyDraft.trim();
+    if (!key || provider === "ollama") return;
+    try {
+      const saved = await postSettings({ provider, model: selectedModel, apiKey: key });
+      setApiKeyDraft("");
+      applyPublic(saved);
+      await loadModelIds(saved);
+      await refreshReadiness();
+    } catch (error) {
+      const message = settingsFailureMessage(error);
+      setModelNote(message);
+      setStatus(message);
     }
   }
 
@@ -233,8 +450,7 @@ export function App() {
   }
 
   function confirmIfDirty(): boolean {
-    const dirty = history.past.length > 0 || messages.length > 0;
-    if (!dirty) return true;
+    if (!isDirty(history.past.length, messages.length)) return true;
     return window.confirm("Open another file and leave the current sheet?");
   }
 
@@ -268,7 +484,7 @@ export function App() {
     rememberDraft(formulaBarText(workbookRef.current.cells[anchorRef.current]));
     setMessages((current) => [
       ...current,
-      { id: crypto.randomUUID(), role: "assistant", text: "Rejected the preview. The sheet was not changed." },
+      { id: crypto.randomUUID(), role: "assistant", text: rejectAssistantText() },
     ]);
     setStatus("Rejected. The sheet was not changed.");
   }
@@ -286,7 +502,7 @@ export function App() {
   }
 
   async function sendPrompt(prompt: string) {
-    if (previewing || busy) return;
+    if (previewing || busy || !aiReady) return;
     commitDraft();
     const prior = messages;
     const nextMessages = [...prior, { id: crypto.randomUUID(), role: "user" as const, text: prompt }];
@@ -301,12 +517,21 @@ export function App() {
       selection,
       history: historyTurns,
       prompt,
-      complete: completeModel,
+      complete: (request) => completeModelRequest(request, fetch, applyUsageFromBody),
     });
     setBusy(false);
     if (result.kind === "error") {
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "error", text: result.message }]);
-      setStatus(result.message);
+      const userError = userErrorFromMessage(result.message);
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: "setup",
+          text: formatUserError(userError),
+          detail: userError.detail,
+        },
+      ]);
+      setStatus(userError.headline);
       return;
     }
     if (result.kind === "message") {
@@ -328,7 +553,12 @@ export function App() {
   return (
     <div className="app">
       <header className="toolbar">
-        <div className="brand">Local AI Sheet</div>
+        <div className="toolbar-primary">
+        <div className="brand">
+          <img className="brand-icon" src="/icon.svg" alt="" width={22} height={22} />
+          Local AI Sheet
+        </div>
+        <span className={`status-pill ${statusPill.tone}`}>{statusPill.label}</span>
         <label>
           Folder
           <input value={directory} onChange={(event) => setDirectory(event.target.value)} spellCheck={false} />
@@ -365,7 +595,69 @@ export function App() {
         <button type="button" onClick={() => void save()} disabled={previewing}>Save</button>
         <button type="button" onClick={() => replaceHistory(undoHistory(history))} disabled={previewing || history.past.length === 0}>Undo</button>
         <button type="button" onClick={() => replaceHistory(redoHistory(history))} disabled={previewing || history.future.length === 0}>Redo</button>
-        <span className={helperOk ? "status ok" : "status bad"}>{helperOk ? "File helper connected" : "File helper is not running"}</span>
+        </div>
+        <div className="toolbar-ai">
+        <label>
+          Provider
+          <select aria-label="Model provider" value={provider} onChange={(event) => void chooseProvider(event.target.value as ProviderId)}>
+            <option value="ollama">Ollama</option>
+            <option value="gemini">Gemini</option>
+            <option value="groq">Groq</option>
+          </select>
+        </label>
+        <label>
+          Model
+          <select aria-label="Model" value={selectedModel} onChange={(event) => void chooseModel(event.target.value)}>
+            <option value="">
+              {visibleModels.length
+                ? "Choose…"
+                : provider === "ollama"
+                  ? "Start Ollama and pull a chat model"
+                  : "No models"}
+            </option>
+            {visibleModels.map((id) => (
+              <option key={id} value={id}>{modelOptionLabel(id)}</option>
+            ))}
+          </select>
+        </label>
+        <details className="toolbar-advanced">
+          <summary>Advanced</summary>
+          <div className="toolbar-advanced-body">
+            {modelOptions.length > listCuratedModels(modelOptions, provider as ModelProviderId).length && (
+              <label className="toggle-inline">
+                <input
+                  type="checkbox"
+                  checked={showAllModels}
+                  onChange={(event) => setShowAllModels(event.target.checked)}
+                />
+                Show all models (not recommended)
+              </label>
+            )}
+            {provider !== "ollama" && (
+              <>
+                <label>
+                  API key
+                  <input
+                    type="password"
+                    aria-label="API key"
+                    value={apiKeyDraft}
+                    placeholder={keyConfigured && keyHint ? `Saved ····${keyHint}` : "Paste API key"}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => setApiKeyDraft(event.target.value)}
+                  />
+                </label>
+                <button type="button" onClick={() => void saveKey()} disabled={!apiKeyDraft.trim()}>Save key</button>
+                {usageNote && (
+                  <span className="usage-note toolbar-usage" title="From provider rate-limit headers on the latest API call">
+                    {usageNote}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+        </details>
+        </div>
       </header>
       {warnings.length > 0 && (
         <div className="banner">
@@ -397,10 +689,19 @@ export function App() {
           messages={messages}
           busy={busy}
           previewing={previewing}
+          aiReady={aiReady}
+          setupIssues={setupIssues}
+          checkingSetup={checkingSetup}
           summaries={summaries}
           warning={previewWarning}
           status={status}
+          modelNote={modelNote}
           onSend={(prompt) => void sendPrompt(prompt)}
+          onRetrySetup={() => {
+            void (async () => {
+              await loadProvider();
+            })();
+          }}
           onSample={previewSample}
           onAccept={acceptPreview}
           onReject={rejectPreview}
@@ -408,34 +709,6 @@ export function App() {
       </div>
     </div>
   );
-}
-
-async function completeModel(request: CompletionRequest): Promise<CompletionResult> {
-  try {
-    const response = await fetch("/api/ai", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    });
-    const body = (await response.json()) as { content?: string; error?: string; schemaRejected?: boolean };
-    if (!response.ok || !body.content) {
-      return {
-        ok: false,
-        status: response.status,
-        error: body.error ?? (response.ok
-          ? "The model returned an empty reply. The sheet was not changed."
-          : "The file helper could not reach LM Studio. The sheet was not changed."),
-        schemaRejected: Boolean(body.schemaRejected),
-      };
-    }
-    return { ok: true, content: body.content };
-  } catch {
-    return {
-      ok: false,
-      status: 0,
-      error: "The file helper is not running. Start it with npm run server. The sheet was not changed.",
-    };
-  }
 }
 
 function readBase64(file: File): Promise<string> {

@@ -1,14 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeSelection } from "../src/engine/address";
-import { proposeEdits, type CompletionRequest, type CompletionResult } from "../src/ai/propose";
-import { modelReplyText } from "../server/model-reply";
+import { proposeEdits } from "../src/ai/propose";
+import { completionFromSettings, prepareCliModel } from "../server/cli-model";
 import { expenseFixture } from "../src/engine/sample";
 import { createWorkbook, type Workbook } from "../src/engine/types";
 import { cellView, sameWorkbook } from "../src/engine/workbook";
 import { evaluationCache } from "../src/engine/formula";
-
-const LM = process.env.LM_STUDIO_URL ?? "http://127.0.0.1:1234/v1";
 
 interface PromptCase {
   id: number;
@@ -45,11 +43,8 @@ async function main(): Promise<void> {
   const notesPath = path.join(process.cwd(), "docs", "model-notes.md");
   let model = "";
   try {
-    const response = await fetch(`${LM}/models`);
-    if (!response.ok) throw new Error(String(response.status));
-    const json = (await response.json()) as { data?: { id?: string }[] };
-    model = json.data?.find((item) => item.id)?.id ?? "";
-    if (!model) throw new Error("no model loaded");
+    const prepared = await prepareCliModel();
+    model = prepared.settings.model;
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unreachable";
     await fs.writeFile(notesPath, unavailableNotes(reason));
@@ -69,7 +64,7 @@ async function main(): Promise<void> {
         selection: item.selection ?? null,
         history: [],
         prompt: item.prompt,
-        complete: (request) => complete(model, request),
+        complete: completionFromSettings,
       });
       const graded = grade(item, started, result);
       if (graded.pass) passed += 1;
@@ -86,7 +81,7 @@ async function main(): Promise<void> {
 }
 
 function unavailableNotes(reason: string): string {
-  return `# Model scorecard\n\nThe scorecard did not run, so the three weakest prompts are not known yet.\n\nLM Studio was not available at http://127.0.0.1:1234 (${reason}). Load a small model, start the local server, and run \`npm run scorecard\`.\n\nThe app still refuses edits unless the checker accepts them. Prompts 15, 16, 17, and 19 are supposed to leave the sheet unchanged.\n\n## Formula differences to watch\n\n- \`COUNT\` counts numbers only. Text and blanks are ignored. \`AVERAGE\` ignores blanks and text. A blank cell used with \`+\` counts as 0.\n- \`SUM\` of an empty range is 0. \`AVERAGE\` of an empty range is \`#DIV/0!\`.\n- Inserting a row shifts references at or below that row. A range grows when the insert sits inside it.\n- Number formats outside \`General\`, \`0\`, \`0.00\`, \`#,##0\`, \`#,##0.00\`, and \`0%\` are stored and written back, but the grid shows the raw number.\n`;
+  return `# Model scorecard\n\nThe scorecard did not run, so the three weakest prompts are not known yet.\n\nThe saved provider in server/model-settings.json could not run (${reason}). Pick Ollama, Gemini, or Groq in the app toolbar, save an API key if needed, choose a model, then run \`npm run scorecard\`.\n\nThe app still refuses edits unless the checker accepts them. Prompts 15, 16, 17, and 19 are supposed to leave the sheet unchanged.\n\n## Formula differences to watch\n\n- \`COUNT\` counts numbers only. Text and blanks are ignored. \`AVERAGE\` ignores blanks and text. A blank cell used with \`+\` counts as 0.\n- \`SUM\` of an empty range is 0. \`AVERAGE\` of an empty range is \`#DIV/0!\`.\n- Inserting a row shifts references at or below that row. A range grows when the insert sits inside it.\n- Number formats outside \`General\`, \`0\`, \`0.00\`, \`#,##0\`, \`#,##0.00\`, and \`0%\` are stored and written back, but the grid shows the raw number.\n`;
 }
 
 function setup(kind: PromptCase["setup"]): Workbook {
@@ -94,34 +89,6 @@ function setup(kind: PromptCase["setup"]): Workbook {
   const workbook = expenseFixture();
   if (kind === "titled") workbook.cells.F1 = { value: "Keep me" };
   return workbook;
-}
-
-async function complete(model: string, request: CompletionRequest): Promise<CompletionResult> {
-  try {
-    const response = await fetch(`${LM}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer lm-studio" },
-      body: JSON.stringify({
-        model,
-        messages: request.messages,
-        temperature: request.temperature,
-        max_tokens: request.max_tokens,
-        stream: false,
-        response_format: request.response_format,
-      }),
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      const schemaRejected = Boolean(request.response_format) && (response.status === 400 || response.status === 422 || /schema|grammar|response_format/i.test(text));
-      return { ok: false, status: response.status, error: text.slice(0, 300), schemaRejected };
-    }
-    const json = JSON.parse(text) as { choices?: { message?: { content?: unknown; reasoning_content?: unknown } }[] };
-    const content = modelReplyText(json.choices?.[0]?.message);
-    if (!content) return { ok: false, status: 502, error: "empty content" };
-    return { ok: true, content };
-  } catch (error) {
-    return { ok: false, status: 503, error: error instanceof Error ? error.message : "LM Studio is not running" };
-  }
 }
 
 function grade(

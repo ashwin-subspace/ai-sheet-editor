@@ -1,10 +1,8 @@
-import { modelReplyText } from "../server/model-reply";
-import { proposeEdits, type CompletionRequest, type CompletionResult } from "../src/ai/propose";
+import { completionFromSettings, prepareCliModel } from "../server/cli-model";
+import { proposeEdits } from "../src/ai/propose";
 import type { ChatTurn } from "../src/engine/context";
 import { createWorkbook, type Workbook } from "../src/engine/types";
 import { sameWorkbook } from "../src/engine/workbook";
-
-const LM = process.env.LM_STUDIO_URL ?? "http://127.0.0.1:1234/v1";
 
 interface Step {
   name: string;
@@ -67,8 +65,8 @@ const steps: Step[] = [
 ];
 
 async function main(): Promise<void> {
-  const model = await loadedModel();
-  console.log(`Model: ${model}`);
+  const prepared = await prepareCliModel();
+  console.log(`Model: ${prepared.label}`);
   let workbook = createWorkbook();
   const history: ChatTurn[] = [];
   let failed = 0;
@@ -80,7 +78,7 @@ async function main(): Promise<void> {
       selection: { anchor: "A1", end: "A1" },
       history,
       prompt: step.prompt,
-      complete: (request) => complete(model, request),
+      complete: completionFromSettings,
     });
     history.push({ role: "user", text: step.prompt });
     if (result.kind === "preview") {
@@ -124,44 +122,6 @@ function dump(workbook: Workbook): string {
     return `${address}: ${text}${cell.bold ? " bold" : ""}`;
   });
   return lines.join("\n") || "(empty sheet)";
-}
-
-async function loadedModel(): Promise<string> {
-  const response = await fetch(`${LM}/models`);
-  if (!response.ok) throw new Error(`LM Studio returned ${response.status}`);
-  const json = (await response.json()) as { data?: { id?: string }[] };
-  const id = json.data?.find((item) => item.id && !item.id.includes("embed"))?.id;
-  if (!id) throw new Error("No chat model is loaded in LM Studio.");
-  return id;
-}
-
-async function complete(model: string, request: CompletionRequest): Promise<CompletionResult> {
-  try {
-    const response = await fetch(`${LM}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer lm-studio" },
-      body: JSON.stringify({
-        model,
-        messages: request.messages,
-        temperature: request.temperature,
-        max_tokens: request.max_tokens,
-        stream: false,
-        response_format: request.response_format,
-      }),
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      const schemaRejected = Boolean(request.response_format) && (response.status === 400 || response.status === 422 || /schema|grammar|response_format/i.test(text));
-      return { ok: false, status: response.status, error: text.slice(0, 300), schemaRejected };
-    }
-    const json = JSON.parse(text) as { choices?: { message?: { content?: unknown; reasoning_content?: unknown } }[] };
-    const content = modelReplyText(json.choices?.[0]?.message);
-    if (!content) return { ok: false, status: 502, error: "The model returned an empty reply." };
-    console.log(`reply: ${content.slice(0, 240).replace(/\s+/g, " ")}`);
-    return { ok: true, content };
-  } catch (error) {
-    return { ok: false, status: 503, error: error instanceof Error ? error.message : "LM Studio is not running" };
-  }
 }
 
 void main();

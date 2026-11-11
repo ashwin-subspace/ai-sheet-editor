@@ -57,6 +57,22 @@ describe("formulas", () => {
     expect(view("=1/0")).toBe("#DIV/0!");
   });
 
+  it("reports VALUE when text is used in arithmetic", () => {
+    let book = createWorkbook();
+    book = applyUserInput(book, "A1", "hello");
+    book = applyUserInput(book, "B1", "=A1+1");
+    expect(cellView(book, "B1", evaluationCache()).text).toBe("#VALUE!");
+  });
+
+  it("reports DIV/0 for AVERAGE of an empty range", () => {
+    expect(view("=AVERAGE(Z1:Z5)")).toBe("#DIV/0!");
+  });
+
+  it("reports REF when a formula names a cell outside the sheet", () => {
+    const runtime = evaluateFormula("=SUM(AA1:AA2)", createWorkbook());
+    expect(runtime).toMatchObject({ kind: "err", value: "#REF!" });
+  });
+
   it("evaluates a standalone formula the same way", () => {
     const book = applyUserInput(createWorkbook(), "A1", "4");
     expect(evaluateFormula("=A1+1", book).kind === "num" && evaluateFormula("=A1+1", book)).toMatchObject({

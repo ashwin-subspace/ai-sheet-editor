@@ -1,3 +1,100 @@
+const writeRangeOp = {
+  type: "object",
+  additionalProperties: false,
+  required: ["op", "start", "rows"],
+  properties: {
+    op: { type: "string", const: "write_range" },
+    start: { type: "string" },
+    rows: {
+      type: "array",
+      maxItems: 40,
+      items: {
+        type: "array",
+        maxItems: 8,
+      },
+    },
+  },
+} as const;
+
+const setFormulaOp = {
+  type: "object",
+  additionalProperties: false,
+  required: ["op", "cell", "formula"],
+  properties: {
+    op: { type: "string", const: "set_formula" },
+    cell: { type: "string" },
+    formula: { type: "string" },
+  },
+} as const;
+
+const formatRangeOp = {
+  type: "object",
+  additionalProperties: false,
+  required: ["op", "range"],
+  properties: {
+    op: { type: "string", const: "format_range" },
+    range: { type: "string" },
+    bold: { type: "boolean" },
+    fill: { type: "string" },
+    numberFormat: { type: "string" },
+  },
+} as const;
+
+const insertRowsOp = {
+  type: "object",
+  additionalProperties: false,
+  required: ["op", "at", "count"],
+  properties: {
+    op: { type: "string", const: "insert_rows" },
+    at: { type: "number" },
+    count: { type: "number" },
+  },
+} as const;
+
+const insertColumnsOp = {
+  type: "object",
+  additionalProperties: false,
+  required: ["op", "at", "count"],
+  properties: {
+    op: { type: "string", const: "insert_columns" },
+    at: { type: "string" },
+    count: { type: "number" },
+  },
+} as const;
+
+const clearRangeOp = {
+  type: "object",
+  additionalProperties: false,
+  required: ["op", "range"],
+  properties: {
+    op: { type: "string", const: "clear_range" },
+    range: { type: "string" },
+  },
+} as const;
+
+const setColumnWidthOp = {
+  type: "object",
+  additionalProperties: false,
+  required: ["op", "column", "width"],
+  properties: {
+    op: { type: "string", const: "set_column_width" },
+    column: { type: "string" },
+    width: { type: "number" },
+  },
+} as const;
+
+const highlightGreaterOp = {
+  type: "object",
+  additionalProperties: false,
+  required: ["op", "leftRange", "rightRange", "fill"],
+  properties: {
+    op: { type: "string", const: "highlight_greater" },
+    leftRange: { type: "string" },
+    rightRange: { type: "string" },
+    fill: { type: "string" },
+  },
+} as const;
+
 export const replySchema = {
   type: "json_schema",
   json_schema: {
@@ -13,38 +110,16 @@ export const replySchema = {
           type: "array",
           maxItems: 40,
           items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["op"],
-            properties: {
-              op: {
-                type: "string",
-                enum: [
-                  "write_range",
-                  "set_formula",
-                  "format_range",
-                  "insert_rows",
-                  "insert_columns",
-                  "clear_range",
-                  "set_column_width",
-                  "highlight_greater",
-                ],
-              },
-              start: { type: "string" },
-              rows: { type: "array" },
-              cell: { type: "string" },
-              formula: { type: "string" },
-              range: { type: "string" },
-              bold: { type: "boolean" },
-              fill: { type: "string" },
-              numberFormat: { type: "string" },
-              at: {},
-              count: { type: "number" },
-              column: { type: "string" },
-              width: { type: "number" },
-              leftRange: { type: "string" },
-              rightRange: { type: "string" },
-            },
+            oneOf: [
+              writeRangeOp,
+              setFormulaOp,
+              formatRangeOp,
+              insertRowsOp,
+              insertColumnsOp,
+              clearRangeOp,
+              setColumnWidthOp,
+              highlightGreaterOp,
+            ],
           },
         },
       },

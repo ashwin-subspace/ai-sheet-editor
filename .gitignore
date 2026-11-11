@@ -3,3 +3,25 @@ dist
 workbooks/**
 !workbooks/.gitkeep
 *.log
+server/model-settings.json
+server/.test-tmp/
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+
+# OS and editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE / local agent
+.cursor/plans/
+.idea/
+.vscode/
+*.swp
+*~
+
+# Test / coverage output
+coverage/

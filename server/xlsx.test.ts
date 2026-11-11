@@ -55,6 +55,32 @@ describe("xlsx round trip", () => {
     expect(loaded.workbook.cells.A2?.numberFormat).toBe("0.00");
     expect(cellView(loaded.workbook, "C1", evaluationCache()).text).toBe("3");
   });
+
+  it("imports an empty workbook", async () => {
+    const loaded = await bufferToWorkbook(await workbookToBuffer(createWorkbook()));
+    expect(loaded.warnings).toEqual([]);
+    expect(Object.keys(loaded.workbook.cells)).toHaveLength(0);
+  });
+
+  it("marks VLOOKUP as unsupported with a cached value", async () => {
+    const book = new ExcelJS.Workbook();
+    const sheet = book.addWorksheet("Sheet1");
+    sheet.getCell("A1").value = { formula: "VLOOKUP(A2,B1:C2,1)", result: 42 };
+    const loaded = await bufferToWorkbook(Buffer.from(await book.xlsx.writeBuffer()));
+    expect(loaded.workbook.cells.A1?.unsupported).toBe(true);
+    expect(loaded.workbook.cells.A1?.cached).toBe(42);
+  });
+
+  it("warns when data is beyond row 200 and does not import it", async () => {
+    const book = new ExcelJS.Workbook();
+    const sheet = book.addWorksheet("Sheet1");
+    sheet.getCell("A201").value = "past cap";
+    sheet.getCell("A1").value = "ok";
+    const loaded = await bufferToWorkbook(Buffer.from(await book.xlsx.writeBuffer()));
+    expect(loaded.warnings.some((w) => /beyond|200|sheet/i.test(w))).toBe(true);
+    expect(loaded.workbook.cells.A201).toBeUndefined();
+    expect(loaded.workbook.cells.A1?.value).toBe("ok");
+  });
 });
 
 describe("backups", () => {
